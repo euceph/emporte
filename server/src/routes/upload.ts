@@ -8,11 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
 import { AiJobData } from '../services/worker.service';
 
-const TEMP_UPLOAD_DIR = path.resolve(process.env.TEMP_DIR || '/tmp/emporte-uploads');
-
 async function upload_routes(fastify: FastifyInstance, options: FastifyPluginOptions) {
-
-
+    const TEMP_UPLOAD_DIR = path.resolve(process.env.TEMP_DIR || '/tmp/emporte-uploads');
     if (!fastify.aiProcessingQueue) {
         throw new Error("aiProcessingQueue decorator is not available. Ensure BullMQ plugin is registered before upload routes.");
     }

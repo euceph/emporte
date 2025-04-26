@@ -22,12 +22,17 @@ async function auth_routes(fastify: FastifyInstance, options: FastifyPluginOptio
 
     fastify.get('/auth/logout', async (request, reply) => {
         try {
-            if (request.session) {
+            if (request.session && request.session.googleTokens) {
+
+                const sessionId = request.session.sessionId;
                 await request.session.destroy();
-                request.log.info('User session destroyed.');
-                reply.clearCookie('sessionId', {path: '/'});
+                request.log.info({ destroyedSessionId: sessionId },'User session destroyed.');
+                reply.clearCookie('sessionId', {
+                    path: '/',
+                });
                 return reply.redirect(process.env.CLIENT_BASE_URL || '/');
             } else {
+                request.log.info('No active/valid session found to log out from.');
                 return reply.send({message: 'No active session to log out from.'});
             }
         } catch (err: any) {

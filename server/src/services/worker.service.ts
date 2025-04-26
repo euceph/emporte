@@ -2,12 +2,8 @@ import fs from 'fs/promises';
 import { Job } from 'bullmq';
 import Redis from 'ioredis';
 import { FastifyBaseLogger } from 'fastify';
-
-
 import { extractScheduleFromImage } from './ai.service';
-
-
-import { scheduleDataSchema, scheduleEventSchema } from '@emporte/common';
+import { scheduleDataSchema, scheduleEventSchema, previewResultSchema, type ProcessingError, type ProcessingWarning, type ScheduleData, type ScheduleEvent } from '@emporte/common';
 import { ZodError, z } from 'zod';
 
 
@@ -39,6 +35,7 @@ export const processAiJob = async (job: Job<AiJobData>, redisClient: Redis, logg
     let termEndDate: string | null = null;
     let filesProcessedSuccessfully = 0;
     const fileProcessingErrors: { filename: string; error: string }[] = [];
+    const processingWarnings: ProcessingWarning[] = [];
 
 
     for (let i = 0; i < tempFilePaths.length; i++) {
@@ -66,39 +63,39 @@ export const processAiJob = async (job: Job<AiJobData>, redisClient: Redis, logg
             );
 
 
-
-            let validatedEventsFromFile: z.infer<typeof scheduleEventSchema>[] = [];
-            const timeRegex = /\d{1,2}:\d{2}\s*(AM|PM)/i;
-
+            let validatedEventsFromFile: ScheduleEvent[] = [];
             if (aiResult && Array.isArray(aiResult.scheduleEvents)) {
                 let originalEventCount = aiResult.scheduleEvents.length;
                 validatedEventsFromFile = aiResult.scheduleEvents.filter((event: any) => {
                     try {
-
                         scheduleEventSchema.parse(event);
                         return true;
-                    } catch(eventValidationError) {
+                    } catch (eventValidationError) {
+                        const warningMsg = "Filtering out invalid event from AI result.";
                         if (eventValidationError instanceof ZodError) {
-                            fileLog.warn({ event, errors: eventValidationError.issues }, "Filtering out invalid event from AI result.");
+                            fileLog.warn({ event, errors: eventValidationError.issues }, warningMsg);
                         } else {
-                            fileLog.warn({ event, error: eventValidationError }, "Filtering out event due to unexpected validation error.");
+                            fileLog.warn({ event, error: eventValidationError }, warningMsg);
                         }
                         return false;
                     }
                 });
                 fileLog.info({ originalCount: originalEventCount, validCount: validatedEventsFromFile.length }, `Validated events from AI result for file.`);
-
-
                 allScheduleEvents.push(...validatedEventsFromFile);
 
-
                 if (!termStartDate && aiResult.termStartDate && typeof aiResult.termStartDate === 'string') {
-
                     if (/^\d{4}-\d{2}-\d{2}$/.test(aiResult.termStartDate)) {
                         termStartDate = aiResult.termStartDate;
                         fileLog.info({ termStartDate }, "Captured term start date from file.");
                     } else {
-                        fileLog.warn({ date: aiResult.termStartDate }, "Term start date from AI has invalid format, ignoring.");
+                        const warningMsg = "Term start date from AI has invalid format (YYYY-MM-DD expected), ignoring value.";
+                        fileLog.warn({ date: aiResult.termStartDate }, warningMsg);
+                        processingWarnings.push({
+                            filename: originalFilename,
+                            message: warningMsg,
+                            field: 'termStartDate',
+                            value: aiResult.termStartDate
+                        });
                     }
                 }
                 if (!termEndDate && aiResult.termEndDate && typeof aiResult.termEndDate === 'string') {
@@ -106,45 +103,44 @@ export const processAiJob = async (job: Job<AiJobData>, redisClient: Redis, logg
                         termEndDate = aiResult.termEndDate;
                         fileLog.info({ termEndDate }, "Captured term end date from file.");
                     } else {
-                        fileLog.warn({ date: aiResult.termEndDate }, "Term end date from AI has invalid format, ignoring.");
+                        const warningMsg = "Term end date from AI has invalid format (YYYY-MM-DD expected), ignoring value.";
+                        fileLog.warn({ date: aiResult.termEndDate }, warningMsg);
+                        processingWarnings.push({
+                            filename: originalFilename,
+                            message: warningMsg,
+                            field: 'termEndDate',
+                            value: aiResult.termEndDate
+                        });
                     }
                 }
 
             } else {
-                fileLog.warn("AI result missing or has invalid scheduleEvents array.");
-
-                fileProcessingErrors.push({ filename: originalFilename, error: "AI result format invalid (missing scheduleEvents array)" });
+                const errorMsg = "AI result format invalid (missing or invalid scheduleEvents array)";
+                fileLog.warn(errorMsg);
+                fileProcessingErrors.push({ filename: originalFilename, error: errorMsg });
             }
-
             filesProcessedSuccessfully++;
             fileLog.info(`Successfully processed file.`);
-
         } catch (error: any) {
+            const errorMsg = error.message || 'Unknown processing error';
             fileLog.error({ err: error }, `Error processing file.`);
-            fileProcessingErrors.push({ filename: originalFilename, error: error.message || 'Unknown processing error' });
-
+            fileProcessingErrors.push({ filename: originalFilename, error: errorMsg });
         } finally {
-
             try {
                 await fs.unlink(tempFilePath);
                 fileLog.info(`Successfully deleted temporary file.`);
             } catch (unlinkError: any) {
-
-
                 fileLog.error({ err: unlinkError }, `!!! CRITICAL: Failed to delete temporary file !!!`);
             }
         }
     }
 
+    log.info({ successCount: filesProcessedSuccessfully, errorCount: fileProcessingErrors.length, warningCount: processingWarnings.length }, "Finished processing all files in job.");
 
-    log.info({ successCount: filesProcessedSuccessfully, errorCount: fileProcessingErrors.length }, "Finished processing all files in job.");
-
-    if (filesProcessedSuccessfully === 0) {
+    if (filesProcessedSuccessfully === 0 && tempFilePaths.length > 0) {
         log.error({ errors: fileProcessingErrors }, "AI processing failed for all files in the job.");
-
         throw new Error(`AI processing failed for all ${tempFilePaths.length} files. Errors: ${JSON.stringify(fileProcessingErrors)}`);
     }
-
 
     const combinedScheduleData = {
         termStartDate: termStartDate,
@@ -153,36 +149,53 @@ export const processAiJob = async (job: Job<AiJobData>, redisClient: Redis, logg
     };
 
 
-    let validatedData: z.infer<typeof scheduleDataSchema>;
+    let validatedScheduleData: ScheduleData;
     try {
-        validatedData = scheduleDataSchema.parse(combinedScheduleData);
-        log.info({ eventCount: validatedData.scheduleEvents.length }, "Combined schedule data passed final Zod validation.");
+        validatedScheduleData = scheduleDataSchema.parse(combinedScheduleData);
+        log.info({ eventCount: validatedScheduleData.scheduleEvents.length }, "Combined schedule data passed core Zod validation.");
     } catch (error) {
+        const baseMsg = "Combined schedule data is invalid after processing";
         if (error instanceof ZodError) {
-            log.error({ errors: error.issues, finalData: combinedScheduleData }, "Combined schedule data FAILED final validation.");
-            throw new Error(`Combined schedule data is invalid after processing: ${error.errors.map(e => e.message).join(', ')}`);
+            const errorDetails = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+            log.error({ errors: error.issues, finalData: combinedScheduleData }, `${baseMsg}: ${errorDetails}`);
+            fileProcessingErrors.push({ filename: 'Combined Data', error: `${baseMsg}: ${errorDetails}` });
+            throw new Error(`${baseMsg}: ${errorDetails}`);
+        } else {
+            log.error({ err: error, finalData: combinedScheduleData }, `Unexpected error during final validation: ${baseMsg}`);
+            throw new Error(`Failed to validate combined schedule data due to an unexpected error.`);
         }
-        log.error({ err: error, finalData: combinedScheduleData }, "Unexpected error during final validation.");
-        throw new Error("Failed to validate combined schedule data due to an unexpected error.");
     }
 
+    const previewResultData = {
+        scheduleData: validatedScheduleData,
+        processingWarnings: processingWarnings,
+        processingErrors: fileProcessingErrors
+    };
+
+    let validatedPreviewResult: z.infer<typeof previewResultSchema>;
+    try {
+        validatedPreviewResult = previewResultSchema.parse(previewResultData);
+        log.info("Final PreviewResult structure passed validation.");
+    } catch (error) {
+        log.error({ err: error, previewResultData }, "!!! CRITICAL: Assembled PreviewResult failed schema validation !!!");
+        validatedPreviewResult = previewResultData;
+    }
 
     const redisKey = `preview:${sessionId}`;
     try {
-
-        await redisClient.set(redisKey, JSON.stringify(validatedData), 'EX', 1800);
-        log.info({ key: redisKey, eventCount: validatedData.scheduleEvents.length }, 'Stored final validated schedule data in Redis.');
+        await redisClient.set(redisKey, JSON.stringify(validatedPreviewResult), 'EX', 1800);
+        log.info({ key: redisKey, eventCount: validatedPreviewResult.scheduleData.scheduleEvents.length, warningCount: validatedPreviewResult.processingWarnings.length, errorCount: validatedPreviewResult.processingErrors.length }, 'Stored final preview result in Redis.');
     } catch (redisError: any) {
         log.error({ err: redisError, key: redisKey }, '!!! Failed to store final preview data in Redis !!!');
-
         throw new Error(`Failed to save final schedule data to Redis: ${redisError.message}`);
     }
 
     log.info(`--- Successfully completed AI processing job ---`);
 
     return {
-        message: `Processed ${filesProcessedSuccessfully}/${tempFilePaths.length} files successfully.`,
-        finalEventCount: validatedData.scheduleEvents.length,
-        errors: fileProcessingErrors,
+        message: `Processed ${filesProcessedSuccessfully}/${tempFilePaths.length} files.`,
+        finalEventCount: validatedPreviewResult.scheduleData.scheduleEvents.length,
+        warningCount: validatedPreviewResult.processingWarnings.length,
+        errorCount: validatedPreviewResult.processingErrors.length
     };
 };

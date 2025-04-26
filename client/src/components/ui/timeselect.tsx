@@ -16,7 +16,7 @@ const generateOptions = (max: number, step: number = 1, pad: number = 2): string
     );
 };
 const generateHourOptions = (): string[] => {
-    return Array.from({ length: 12 }, (_, i) => String(i + 1)); // 1 to 12
+    return Array.from({ length: 12 }, (_, i) => String(i + 1));
 }
 
 const hourOptions = generateHourOptions();

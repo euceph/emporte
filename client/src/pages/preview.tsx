@@ -1,32 +1,16 @@
-import React, {useState, useEffect, useRef} from 'react';
-import {useNavigate} from 'react-router';
-import {Button} from '@/components/ui/button';
-import {Loader2, CalendarDays, Trash2} from 'lucide-react';
-import {toast} from 'sonner';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router';
+import { Button } from '@/components/ui/button';
+import { Loader2, CalendarDays, Trash2, AlertTriangle, FileWarning } from 'lucide-react';
+import { toast } from 'sonner';
 import ScheduleGrid from "@/components/schedulegrid";
-import {format as formatDate} from 'date-fns';
-import {DateRangePicker} from '@/components/ui/date-range-picker';
-import {Label} from '@/components/ui/label';
-import {type DateRange} from 'react-day-picker';
+import { format as formatDate } from 'date-fns';
+import { DateRangePicker } from '@/components/ui/date-range-picker';
+import { Label } from '@/components/ui/label';
+import { type DateRange } from 'react-day-picker';
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-
-export interface ScheduleEvent {
-    courseCode: string;
-    courseName: string | null;
-    sectionDetails: string | null;
-    days: string[];
-    startTime: string | null;
-    endTime: string | null;
-    location: string | null;
-}
-
-export interface ScheduleData {
-    termStartDate: string | null;
-    termEndDate: string | null;
-    scheduleEvents: ScheduleEvent[];
-
-}
-
+import type { ScheduleData, ScheduleEvent, ProcessingWarning, ProcessingError, PreviewResult } from '@emporte/common';
 
 const parseDateString = (dateStr: string | null | undefined): Date | undefined => {
     if (!dateStr) return undefined;
@@ -43,56 +27,49 @@ const parseDateString = (dateStr: string | null | undefined): Date | undefined =
     }
 };
 
-
 const POLLING_INTERVAL_MS = 1500;
 const POLLING_TIMEOUT_MS = 30000;
 
 const Preview: React.FC = () => {
-
     const [scheduleData, setScheduleData] = useState<ScheduleData | null>(null);
+    const [processingWarnings, setProcessingWarnings] = useState<ProcessingWarning[]>([]);
+    const [processingErrors, setProcessingErrors] = useState<ProcessingError[]>([]);
     const [termDateRange, setTermDateRange] = useState<DateRange | undefined>(undefined);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [isConfirming, setIsConfirming] = useState<boolean>(false);
     const [isCancelling, setIsCancelling] = useState<boolean>(false);
-    const [error, setError] = useState<string | null>(null);
+    const [fetchError, setFetchError] = useState<string | null>(null);
     const navigate = useNavigate();
-
 
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-
     useEffect(() => {
         const clearTimers = () => {
-            if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-                // console.log('Polling interval cleared.');
-            }
-            if (timeoutRef.current) {
-                clearTimeout(timeoutRef.current);
-                timeoutRef.current = null;
-                // console.log('Polling timeout cleared.');
-            }
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            intervalRef.current = null;
+            timeoutRef.current = null;
         };
 
         const fetchPreviewData = async () => {
-            // console.log('Polling for /api/preview data...');
             try {
                 const serverUrl = import.meta.env.VITE_SERVER_BASE_URL;
                 const response = await fetch(`${serverUrl}/api/preview`, { method: 'GET', credentials: 'include' });
                 const result = await response.json().catch(() => ({}));
 
                 if (response.ok) {
-                    // console.log('Success: Data received from /api/preview');
-                    if (!result || !result.scheduleData || !Array.isArray(result.scheduleData.scheduleEvents)) {
-                        throw new Error("Received invalid schedule data format from server.");
+                    if (!result || !result.previewResult || !result.previewResult.scheduleData) {
+                        throw new Error("Received invalid preview result format from server.");
                     }
+                    const preview: PreviewResult = result.previewResult;
 
-                    setScheduleData(result.scheduleData);
+                    setScheduleData(preview.scheduleData);
+                    setProcessingWarnings(preview.processingWarnings || []);
+                    setProcessingErrors(preview.processingErrors || []);
 
-                    const initialStartDate = parseDateString(result.scheduleData.termStartDate);
-                    const initialEndDate = parseDateString(result.scheduleData.termEndDate);
+                    const initialStartDate = parseDateString(preview.scheduleData.termStartDate);
+                    const initialEndDate = parseDateString(preview.scheduleData.termEndDate);
 
                     let newRange: DateRange | undefined = undefined;
                     let needsDateToast = false;
@@ -110,73 +87,86 @@ const Preview: React.FC = () => {
                         needsDateToast = true;
                     } else {
                         newRange = undefined;
-                        needsDateToast = true;
+                        if ((preview.processingWarnings || []).some(w => w.field?.startsWith('term')) || (!initialStartDate && !initialEndDate)) {
+                            needsDateToast = true;
+                        }
                     }
-
                     setTermDateRange(newRange);
 
                     if (needsDateToast) {
                         toast.info("Term Dates Need Selection", {
-                            description: "AI couldn't fully determine the term dates. Please select the start and end dates manually."
+                            description: "AI couldn't fully determine the term dates. Please select the start and end dates manually.",
+                            duration: 7000
+                        });
+                    }
+                    if ((preview.processingWarnings || []).length > 0) {
+                        toast.warning("Processing Warnings", {
+                            description: "Some issues were found during processing. Please review the warnings below.",
+                            duration: 6000
+                        });
+                    }
+                    if ((preview.processingErrors || []).length > 0) {
+                        toast.error("File Processing Errors", {
+                            description: `${preview.processingErrors.length} file(s) could not be processed. See details below.`,
+                            duration: 8000
                         });
                     }
 
+
                     setIsLoading(false);
-                    setError(null);
+                    setFetchError(null);
                     clearTimers();
                     toast.success("Schedule preview ready!");
                     return;
                 }
+
                 if (response.status === 404) {
-                    // console.log('Data not ready yet (404), continuing poll...');
                     if (!isLoading) setIsLoading(true);
                 } else if (response.status === 401) {
-                    // console.log('API returned 401 Unauthorized');
-                    toast.error("Unauthorized", {description: "Your session expired. Please log in again."});
+                    toast.error("Unauthorized", { description: "Your session expired. Please log in again." });
                     clearTimers();
                     navigate('/login');
                     setIsLoading(false);
                 } else {
-                    console.error(`API Error: Status ${response.status}`);
                     const errorMsg = result.message || result.error || `Failed to fetch preview data (Status: ${response.status}).`;
-                    setError(errorMsg);
+                    setFetchError(errorMsg);
                     setIsLoading(false);
                     clearTimers();
-                    toast.error("Error fetching preview", {description: errorMsg});
+                    toast.error("Error fetching preview", { description: errorMsg });
                 }
             } catch (networkError: unknown) {
-                console.error("Network error fetching preview data:", networkError);
-                let errorMessage = "Network error. Please check your connection.";
+                let errorMessage = "Network error fetching preview. Please check your connection.";
                 if (networkError instanceof Error) errorMessage = networkError.message;
-                setError(errorMessage);
+                setFetchError(errorMessage);
                 setIsLoading(false);
                 clearTimers();
-                toast.error("Network Error", {description: errorMessage});
+                toast.error("Network Error", { description: errorMessage });
             }
         };
 
         setIsLoading(true);
-        setError(null);
+        setFetchError(null);
         setScheduleData(null);
+        setProcessingWarnings([]);
+        setProcessingErrors([]);
         setTermDateRange(undefined);
+
         fetchPreviewData();
-
-
-        if (isLoading && !intervalRef.current && !timeoutRef.current) {
+        if (!intervalRef.current && !timeoutRef.current) {
             intervalRef.current = setInterval(fetchPreviewData, POLLING_INTERVAL_MS);
             timeoutRef.current = setTimeout(() => {
-                console.warn(`Polling timed out after ${POLLING_TIMEOUT_MS / 1000}s.`);
                 if (isLoading) {
-                    setError('Processing is taking longer than expected. Please try again.');
+                    console.warn(`Polling timed out after ${POLLING_TIMEOUT_MS / 1000}s.`);
+                    setFetchError('Processing is taking longer than expected. The server might be busy or an error occurred. Please try uploading again.');
                     setIsLoading(false);
-                    toast.error("Processing Timed Out", {duration: 6000});
+                    toast.error("Processing Timed Out", { duration: 8000 });
                     clearTimers();
                 }
             }, POLLING_TIMEOUT_MS);
         }
 
+
         return () => {
-            // console.log('PreviewPage cleanup: Clearing timers.');
             clearTimers();
         };
     }, [navigate]);
@@ -186,9 +176,9 @@ const Preview: React.FC = () => {
         setScheduleData(currentData => {
             if (!currentData) return null;
             const newEvents = currentData.scheduleEvents.map((event, i) => i === index ? updatedEventData : event);
-            return {...currentData, scheduleEvents: newEvents};
+            return { ...currentData, scheduleEvents: newEvents };
         });
-        toast.info("Event Updated", {description: "Changes staged. Confirm to save to calendar."});
+        toast.info("Event Updated", { description: "Changes staged. Confirm to save to calendar." });
     };
 
 
@@ -199,15 +189,15 @@ const Preview: React.FC = () => {
         const formattedEndDate = endDate ? formatDate(endDate, 'yyyy-MM-dd') : null;
 
         if (!scheduleData) {
-            toast.error("Error", {description: "No schedule data available."});
+            toast.error("Error", { description: "No schedule data available." });
             return;
         }
         if (!formattedStartDate || !formattedEndDate) {
-            toast.error("Missing Information", {description: "Term dates must be selected."});
+            toast.error("Missing Information", { description: "Valid term start and end dates must be selected." });
             return;
         }
         if (startDate && endDate && endDate < startDate) {
-            toast.error("Invalid Dates", {description: "Term end date before start date."});
+            toast.error("Invalid Dates", { description: "Term end date cannot be before start date." });
             return;
         }
 
@@ -224,8 +214,8 @@ const Preview: React.FC = () => {
 
         const initialEventCount = scheduleData.scheduleEvents.length;
         if (validEvents.length === 0) {
-            const msg = initialEventCount > 0 ? "None of the events have valid days/times." : "There are no events to import.";
-            toast.error(initialEventCount > 0 ? "No Valid Events" : "No Events", {description: msg});
+            const msg = initialEventCount > 0 ? "None of the events have valid days/times after filtering." : "There are no events to import.";
+            toast.error(initialEventCount > 0 ? "No Valid Events" : "No Events", { description: msg });
             return;
         }
 
@@ -233,21 +223,11 @@ const Preview: React.FC = () => {
         let userTimeZone: string | undefined = undefined;
         try {
             userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            if (!userTimeZone) {
-                throw new Error("Browser did not provide a timezone.");
-            }
-            // console.log("User timezone detected:", userTimeZone);
+            if (!userTimeZone) throw new Error("Browser did not provide a timezone.");
         } catch (tzError: unknown) {
-
             let errorMessage = "Could not detect browser timezone.";
-            if (tzError instanceof Error) {
-                console.error("Could not get user timezone:", tzError.message);
-                errorMessage = tzError.message;
-            } else {
-
-                console.error("Could not get user timezone (unknown error type):", tzError);
-            }
-            toast.error("Timezone Error", {description: `${errorMessage} Cannot create calendar events accurately.`});
+            if (tzError instanceof Error) errorMessage = tzError.message;
+            toast.error("Timezone Error", { description: `${errorMessage} Cannot create calendar events accurately.` });
             return;
         }
 
@@ -267,7 +247,7 @@ const Preview: React.FC = () => {
             const serverUrl = import.meta.env.VITE_SERVER_BASE_URL;
             const response = await fetch(`${serverUrl}/api/calendar/create`, {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payloadToSend),
                 credentials: 'include',
             });
@@ -278,41 +258,24 @@ const Preview: React.FC = () => {
                 throw new Error(result.message || `Failed: ${response.statusText}`);
             }
 
-
             const eventsFilteredCount = initialEventCount - validEvents.length;
             const baseMessage = result.message || `Created ${result.details?.created || validEvents.length} event series.`;
-            let finalDescription = baseMessage;
 
-            if (result.success === false) {
-                toast.warning("Partial Success", {description: baseMessage, duration: 8000});
-                navigate('/success', {
-                    state: {
-                        message: baseMessage,
-                        details: result.details,
-                        ignoredCount: eventsFilteredCount
-                    }
-                });
-            } else {
-                if (eventsFilteredCount > 0) {
-                    const ignoredMsg = ` (${eventsFilteredCount} invalid event${eventsFilteredCount > 1 ? 's' : ''} ignored).`;
-                    finalDescription = baseMessage + ignoredMsg;
-                    toast.success("Import Successful (with notices)", {description: finalDescription, duration: 6000});
-                } else {
-                    toast.success("Import Successful!", {description: finalDescription, duration: 5000});
+            navigate('/success', {
+                state: {
+                    message: baseMessage,
+                    details: result.details,
+                    ignoredCount: eventsFilteredCount,
+                    warnings: processingWarnings,
+                    errors: processingErrors,
                 }
-                navigate('/success', {
-                    state: {
-                        message: finalDescription,
-                        details: result.details,
-                        ignoredCount: eventsFilteredCount
-                    }
-                });
-            }
+            });
+
         } catch (error: unknown) {
             toast.dismiss(loadingToastId);
             let errorMessage = "Could not add events to calendar.";
             if (error instanceof Error) errorMessage = error.message;
-            toast.error("Import Failed", {description: errorMessage});
+            toast.error("Import Failed", { description: errorMessage });
             console.error("Calendar creation API call failed:", error);
         } finally {
             setIsConfirming(false);
@@ -325,75 +288,114 @@ const Preview: React.FC = () => {
         const loadingToastId = toast.loading("Cancelling import...");
         try {
             const serverUrl = import.meta.env.VITE_SERVER_BASE_URL;
-            const response = await fetch(`${serverUrl}/api/preview/delete`, {method: 'DELETE', credentials: 'include'});
+            const response = await fetch(`${serverUrl}/api/preview/delete`, { method: 'DELETE', credentials: 'include' });
             toast.dismiss(loadingToastId);
-            if (response.ok) {
-                toast.success("Import Cancelled");
-                navigate('/import');
-            } else {
+            if (!response.ok) {
                 const result = await response.json().catch(() => ({}));
                 throw new Error(result.message || `Failed to cancel: ${response.statusText}`);
             }
+            toast.success("Import Cancelled");
+            navigate('/import');
         } catch (error: unknown) {
             toast.dismiss(loadingToastId);
             let errorMessage = "Could not cancel import.";
             if (error instanceof Error) errorMessage = error.message;
-            toast.error("Cancellation Failed", {description: errorMessage});
+            toast.error("Cancellation Failed", { description: errorMessage });
             console.error("Cancel import API call failed:", error);
         } finally {
             setIsCancelling(false);
         }
     };
 
+    const renderWarnings = () => {
+        if (processingWarnings.length === 0) return null;
+        return (
+            <Alert variant="default" className="mb-6 border-yellow-500/50 bg-yellow-500/10 text-yellow-800 dark:text-yellow-300">
+                <FileWarning className="h-4 w-4 !text-yellow-600 dark:!text-yellow-400" />
+                <AlertTitle className="font-semibold !text-yellow-700 dark:!text-yellow-300">Processing Warnings</AlertTitle>
+                <AlertDescription className="text-sm space-y-1 mt-1">
+                    {processingWarnings.map((warning, index) => (
+                        <p key={index}>
+                            {warning.filename && <span className="font-medium">[{warning.filename}]</span>} {warning.message}
+                            {warning.field && <span className="text-xs opacity-80"> (Field: {warning.field})</span>}
+                            {warning.value !== undefined && typeof warning.value !== 'object' && <span className="text-xs opacity-80"> (Value: "{String(warning.value).substring(0, 50)}")</span>}
+                        </p>
+                    ))}
+                    <p className="mt-2 text-xs italic">Review schedule details/dates. Invalid info might be ignored or require manual input.</p>
+                </AlertDescription>
+            </Alert>
+        );
+    };
+
+    const renderErrors = () => {
+        if (processingErrors.length === 0) return null;
+        return (
+            <Alert variant="destructive" className="mb-6">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle className="font-semibold">File Processing Errors</AlertTitle>
+                <AlertDescription className="text-sm space-y-1 mt-1">
+                    {processingErrors.map((error, index) => (
+                        <p key={index}>
+                            <span className="font-medium">[{error.filename}]</span>: {error.error}
+                        </p>
+                    ))}
+                    <p className="mt-2 text-xs italic">These files could not be processed. Their data is not included in the preview.</p>
+                </AlertDescription>
+            </Alert>
+        );
+    }
 
     const renderContent = () => {
         if (isLoading) {
             return (
                 <div className="flex flex-col justify-center items-center h-80">
-                    <Loader2 className="h-8 w-8 animate-spin text-primary"/>
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
                     <span className="ml-2 text-muted-foreground mt-2">Processing schedule...</span>
                 </div>
             );
         }
-        if (error) {
+        if (fetchError) {
             return (
-                <div
-                    className="flex flex-col justify-center items-center h-80 text-destructive bg-destructive/10 border border-destructive/30 rounded-lg p-4">
-                    <p className="text-lg font-semibold">Error Loading Preview</p>
-                    <p className="mt-1 text-sm text-center">{error}</p>
-                    <Button variant="outline" size="sm" onClick={() => window.location.reload()} className="mt-4">
+                <Alert variant="destructive" className="my-6">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Error Loading Preview</AlertTitle>
+                    <AlertDescription>{fetchError}</AlertDescription>
+                    <Button variant="outline" size="sm" onClick={() => window.location.reload()} className="mt-3">
                         Try Again
                     </Button>
-                </div>
+                </Alert>
             );
         }
         if (!scheduleData) {
-            return <div className="text-center h-80 flex items-center justify-center text-muted-foreground">No schedule
-                data available.</div>;
+            return <div className="text-center h-80 flex items-center justify-center text-muted-foreground">No schedule data available to display.</div>;
         }
+
         return (
             <div className="bg-muted/20 rounded-lg mb-6 overflow-x-auto border border-border/20">
-                <ScheduleGrid scheduleData={scheduleData} onUpdateEvent={handleUpdateEvent}/>
+                <ScheduleGrid scheduleData={scheduleData} onUpdateEvent={handleUpdateEvent} />
             </div>
         );
     };
 
 
     return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
+        <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4 pt-8 pb-8">
             <div className="w-full max-w-5xl p-6 bg-card border border-border/40 rounded-xl shadow-lg flex flex-col">
                 <h1 className="text-2xl font-bold mb-2 text-center">Preview Your Schedule</h1>
-                <p className="text-muted-foreground text-center mb-4">Verify or edit details below. Click an event to
-                    modify it.</p>
+                <p className="text-muted-foreground text-center mb-4">Verify or edit extracted details below. Click an event to modify it.</p>
 
+                {}
+                {renderErrors()}
+                {renderWarnings()}
 
-                <div
-                    className="flex flex-col sm:flex-row gap-2 sm:gap-4 justify-center items-center mb-6 p-4 border bg-muted/30 rounded-lg">
+                {}
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 justify-center items-center mb-6 p-4 border bg-muted/30 rounded-lg">
                     <div className='flex items-center gap-2 flex-shrink-0'>
-                        <CalendarDays className="h-5 w-5 text-muted-foreground"/>
-                        <Label className='font-medium text-sm whitespace-nowrap'>Term Dates:</Label>
+                        <CalendarDays className="h-5 w-5 text-muted-foreground" />
+                        <Label htmlFor="term-date-picker" className='font-medium text-sm whitespace-nowrap'>Term Dates:</Label>
                     </div>
                     <DateRangePicker
+                        id="term-date-picker"
                         range={termDateRange}
                         setRange={setTermDateRange}
                         placeholder="Select Term Start & End Dates"
@@ -401,30 +403,30 @@ const Preview: React.FC = () => {
                     />
                 </div>
 
-
-                <div className="flex-grow mb-6">
+                {}
+                <div className="flex-grow mb-6 min-h-[200px]"> {}
                     {renderContent()}
                 </div>
 
-
-                {!isLoading && !error && (
+                {}
+                {!isLoading && !fetchError && scheduleData && (
                     <div className="flex flex-col sm:flex-row justify-end gap-3 mt-auto border-t border-border/40 pt-4">
                         <Button
                             variant="default"
                             onClick={handleConfirmImport}
-                            disabled={isConfirming || isCancelling || !scheduleData || !termDateRange?.from || !termDateRange?.to}
+                            disabled={isConfirming || isCancelling || !termDateRange?.from || !termDateRange?.to}
                             className="min-w-[200px]"
+                            aria-label="Confirm and add events to Google Calendar"
                         >
-                            {isConfirming ? (<><Loader2
-                                className="h-4 w-4 animate-spin"/>Confirming...</>) : 'Confirm and Add to Calendar'}
+                            {isConfirming ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Confirming...</>) : 'Confirm & Add to Calendar'}
                         </Button>
                         <Button
                             variant="destructive"
                             onClick={handleCancelImport}
                             disabled={isConfirming || isCancelling}
+                            aria-label="Cancel import and return"
                         >
-                            {isCancelling ? (<><Loader2 className="h-4 w-4 animate-spin"/>Cancelling...</>) : (<><Trash2
-                                className="h-4 w-4"/>Cancel Import</>)}
+                            {isCancelling ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Cancelling...</>) : (<><Trash2 className="mr-2 h-4 w-4" />Cancel Import</>)}
                         </Button>
                     </div>
                 )}

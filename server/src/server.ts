@@ -61,12 +61,8 @@ declare module 'fastify' {
     }
 }
 
-
-
 const TEMP_UPLOAD_DIR = path.resolve(process.env.TEMP_DIR || '/tmp/emporte-uploads');
 const MAX_FILE_AGE_HOURS = parseInt(process.env.TEMP_FILE_MAX_AGE_HOURS || '24', 10);
-
-
 
 async function setupTemporaryDirectory(dirPath: string, logger: FastifyInstance['log']): Promise<void> {
     try {
@@ -156,7 +152,8 @@ function scheduleTempFileCleanup(logger: FastifyInstance['log']): void {
     }
 }
 
-async function buildServer(): Promise<FastifyInstance> {
+export async function buildServer(): Promise<FastifyInstance> {
+    const TEMP_UPLOAD_DIR = path.resolve(process.env.TEMP_DIR || '/tmp/emporte-uploads');
     const server = fastify({
         logger: {
             level: process.env.LOG_LEVEL || 'info',

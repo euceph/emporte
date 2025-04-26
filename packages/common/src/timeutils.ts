@@ -3,19 +3,23 @@
  * returns NaN if the format is invalid
  */
 export const parseTimeToMinutes = (timeString: string | null | undefined): number => {
-
-
     if (!timeString) {
         return NaN;
     }
 
+    const match = timeString.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
 
-    const match = timeString.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-    if (!match) return NaN;
+    if (!match) {
+        return NaN;
+    }
 
     let hours = parseInt(match[1], 10);
     const minutes = parseInt(match[2], 10);
     const period = match[3].toUpperCase();
+
+    if (isNaN(hours) || isNaN(minutes) || hours < 1 || hours > 12 || minutes < 0 || minutes > 59) {
+        return NaN;
+    }
 
     if (hours === 12) {
         hours = period === 'AM' ? 0 : 12;
@@ -23,7 +27,7 @@ export const parseTimeToMinutes = (timeString: string | null | undefined): numbe
         hours += 12;
     }
 
-    if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    if (hours < 0 || hours > 23) {
         return NaN;
     }
 

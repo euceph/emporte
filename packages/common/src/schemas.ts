@@ -1,5 +1,6 @@
-// --- zod schemas ---
 import {z} from "zod";
+
+const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date format, expected YYYY-MM-DD");
 
 export const scheduleEventSchema = z.object({
     courseCode: z.string(),
@@ -13,8 +14,8 @@ export const scheduleEventSchema = z.object({
 export type ScheduleEvent = z.infer<typeof scheduleEventSchema>;
 
 export const scheduleDataSchema = z.object({
-    termStartDate: z.string().nullable(),
-    termEndDate: z.string().nullable(),
+    termStartDate: dateStringSchema.nullable(),
+    termEndDate: dateStringSchema.nullable(),
     scheduleEvents: z.array(scheduleEventSchema),
 });
 export type ScheduleData = z.infer<typeof scheduleDataSchema>;
@@ -34,3 +35,24 @@ export const createCalendarBodySchema = scheduleDataSchema.extend({
         })
 });
 export type CreateCalendarBody = z.infer<typeof createCalendarBodySchema>;
+
+export const processingErrorSchema = z.object({
+    filename: z.string(),
+    error: z.string(),
+});
+export type ProcessingError = z.infer<typeof processingErrorSchema>;
+
+export const processingWarningSchema = z.object({
+    filename: z.string().optional(),
+    message: z.string(),
+    field: z.string().optional(),
+    value: z.any().optional(),
+});
+export type ProcessingWarning = z.infer<typeof processingWarningSchema>;
+
+export const previewResultSchema = z.object({
+    scheduleData: scheduleDataSchema,
+    processingWarnings: z.array(processingWarningSchema).default([]),
+    processingErrors: z.array(processingErrorSchema).default([]),
+});
+export type PreviewResult = z.infer<typeof previewResultSchema>;
