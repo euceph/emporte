@@ -8,6 +8,10 @@
       "path": "./tsconfig.node.json"
     }
   ],
+  "types": [
+    "node",
+    "vitest/globals"
+  ],
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {

@@ -1,9 +1,8 @@
-import React, {useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 import {cn} from "@/lib/utils";
 import {parseTimeToMinutes, formatMinutesToTime, getDayIndex} from '@emporte/common';
-import {type ScheduleData, type ScheduleEvent} from '@/pages/preview';
+import {type ScheduleData, type ScheduleEvent} from '@emporte/common';
 import {Card} from '@/components/ui/card';
-
 import {Button} from "@/components/ui/button";
 import {Input} from "@/components/ui/input";
 import {Label} from "@/components/ui/label";
@@ -17,7 +16,6 @@ import {TimeSelect} from "@/components/ui/timeselect";
 import {Edit3} from 'lucide-react';
 import {toast} from 'sonner';
 import {motion} from 'framer-motion';
-
 
 interface ScheduleGridProps {
     scheduleData: ScheduleData;
@@ -38,6 +36,7 @@ const colorPairs = [
     {bg: 'bg-rose-500', text: 'text-white', border: 'border-rose-600'},
     {bg: 'bg-indigo-500', text: 'text-white', border: 'border-indigo-600'},
 ];
+type ColorPair = typeof colorPairs[0];
 
 const DAY_INITIALS: { [key: string]: string } = {
     "Monday": "M",
@@ -49,6 +48,11 @@ const DAY_INITIALS: { [key: string]: string } = {
 const ALL_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const SHORT_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
 
+const getBaseCourseCode = (courseCode: string | null | undefined): string => {
+    if (!courseCode) return '';
+    const match = courseCode.match(/^([A-Z]+(?:-|\s)?\d+[A-Z]?)/i);
+    return match ? match[1].toUpperCase().replace(/\s|-/g, '') : courseCode.toUpperCase();
+};
 
 interface EventEditFormProps {
     event: ScheduleEvent;
@@ -245,34 +249,42 @@ const EventEditForm: React.FC<EventEditFormProps> = ({event, originalIndex, onSa
 const ScheduleGrid: React.FC<ScheduleGridProps> = ({scheduleData, onUpdateEvent}) => {
     const {scheduleEvents} = scheduleData;
 
+    const [courseColors, setCourseColors] = useState<Map<string, ColorPair>>(new Map());
 
-    const [courseColors] = useState<Map<string, typeof colorPairs[0]>>(() => {
-        // console.log("Assigning stable course colors ONCE.");
-        const colors = new Map<string, typeof colorPairs[0]>();
-        const availableColorPairs = [...colorPairs];
-        let fallbackColorPairIndex = 0;
-
-
-        scheduleEvents.forEach(event => {
-            if (event.courseCode && !colors.has(event.courseCode)) {
-                let assignedColorPair: typeof colorPairs[0];
-                if (availableColorPairs.length > 0) {
-                    const randomIndex = Math.floor(Math.random() * availableColorPairs.length);
-                    assignedColorPair = availableColorPairs[randomIndex];
-                    availableColorPairs.splice(randomIndex, 1);
-                } else {
-                    assignedColorPair = colorPairs[fallbackColorPairIndex % colorPairs.length];
-                    fallbackColorPairIndex++;
+    useEffect(() => {
+        setCourseColors(prevMap => {
+            const currentBaseCodes = new Set<string>();
+            scheduleEvents.forEach(event => {
+                if (event.courseCode) {
+                    const baseCode = getBaseCourseCode(event.courseCode);
+                    if (baseCode) currentBaseCodes.add(baseCode);
                 }
-                colors.set(event.courseCode, assignedColorPair);
+            });
+
+            let updated = false;
+            const newMap = new Map(prevMap);
+            let nextColorIndex = newMap.size;
+
+            currentBaseCodes.forEach(baseCode => {
+                if (!newMap.has(baseCode)) {
+                    const color = colorPairs[nextColorIndex % colorPairs.length];
+                    newMap.set(baseCode, color);
+                    nextColorIndex++;
+                    updated = true;
+                }
+            });
+
+            if (updated) {
+                return newMap;
             }
+
+            return prevMap;
         });
-        return colors;
-    });
+
+    }, [scheduleEvents]);
 
 
     const {minTime, maxTime} = useMemo(() => {
-        // console.log("Recalculating time range...");
         let earliest = 24 * 60, latest = 0;
         scheduleEvents.forEach(event => {
             const start = event.startTime ? parseTimeToMinutes(event.startTime) : NaN;
@@ -294,7 +306,6 @@ const ScheduleGrid: React.FC<ScheduleGridProps> = ({scheduleData, onUpdateEvent}
 
 
     const eventsByDay = useMemo(() => {
-        // console.log("Grouping events by day...");
         const grouped: { [key: number]: (ScheduleEvent & { originalIndex: number })[] } = {
             0: [], 1: [], 2: [], 3: [], 4: []
         };
@@ -326,11 +337,12 @@ const ScheduleGrid: React.FC<ScheduleGridProps> = ({scheduleData, onUpdateEvent}
     const totalHours = Math.ceil(totalMinutes / timeInterval);
     const gridHeightRem = totalHours * 3;
 
+    const fallbackColor = colorPairs[0];
 
     return (
         <Card className="p-4 overflow-hidden bg-card">
 
-            <div className="grid grid-cols-[auto_repeat(5,1fr)] gap-x-2 relative">
+            <div className="grid grid-cols-[auto_repeat(5,1fr)] gap-x-2 relative" role="grid">
                 <div className="sticky top-0 z-20 bg-card pb-2"></div>
                 {SHORT_DAYS.map(day => (
                     <div key={day}
@@ -395,8 +407,8 @@ const ScheduleGrid: React.FC<ScheduleGridProps> = ({scheduleData, onUpdateEvent}
                                     const height = totalMinutes > 0 ? (duration / totalMinutes) * 100 : 0;
 
                                     if (isNaN(topOffset) || isNaN(height) || height <= 0) return null;
-
-                                    const courseColor = event.courseCode ? courseColors.get(event.courseCode) : colorPairs[0];
+                                    const baseCode = getBaseCourseCode(event.courseCode);
+                                    const courseColor = courseColors.get(baseCode) || fallbackColor;
                                     const instanceKey = `${originalIndex}-day-${dayIndex}`;
 
                                     return (

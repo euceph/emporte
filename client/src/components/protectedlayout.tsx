@@ -58,7 +58,7 @@ const ProtectedLayout: React.FC = () => {
 
     if (isAuthenticated === null) {
         return (
-            <div className="flex justify-center items-center min-h-screen">
+            <div data-testid="loading-spinner" className="flex justify-center items-center min-h-screen">
                 <Loader2 className="h-8 w-8 animate-spin text-primary"/>
             </div>
         );
