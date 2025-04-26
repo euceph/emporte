@@ -418,7 +418,7 @@ const Preview: React.FC = () => {
                             className="min-w-[200px]"
                             aria-label="Confirm and add events to Google Calendar"
                         >
-                            {isConfirming ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Confirming...</>) : 'Confirm & Add to Calendar'}
+                            {isConfirming ? (<><Loader2 className="h-4 w-4 animate-spin" />Confirming...</>) : 'Confirm & Add to Calendar'}
                         </Button>
                         <Button
                             variant="destructive"
@@ -426,7 +426,7 @@ const Preview: React.FC = () => {
                             disabled={isConfirming || isCancelling}
                             aria-label="Cancel import and return"
                         >
-                            {isCancelling ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Cancelling...</>) : (<><Trash2 className="mr-2 h-4 w-4" />Cancel Import</>)}
+                            {isCancelling ? (<><Loader2 className="h-4 w-4 animate-spin" />Cancelling...</>) : (<><Trash2 className="h-4 w-4" />Cancel Import</>)}
                         </Button>
                     </div>
                 )}
